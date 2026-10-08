@@ -147,7 +147,7 @@ def check_entry_date(entry, raw_html_downloaded):
 
 def extract_article_content(url):
     """
-    Robust scraper featuring trafilatura + custom BeautifulSoup fallback for 
+    Robust scraper featuring trafilatura + custom BeautifulSoup fallback for
     sites like ft.lk and adaderana.lk to bypass ad pop-ups and custom structures.
     """
     headers = {
@@ -271,7 +271,7 @@ def rewrite_with_gemini(raw_text, original_title):
         "image_query": "2 to 3 concise English keywords for stock photo search",
         "meta_title": "SEO title under 60 chars ending with | BrunchPress",
         "meta_description": "Engaging news summary under 155 chars for search engines",
-        "focus_keyword": "Primary 2-3 word topic keyword"
+        "focus_keyword": "Primary 2-3 word topic keyword, comma-separated if multiple keywords"
       }}
 
     Original Title: {original_title}
@@ -303,11 +303,18 @@ def post_to_wordpress(title, content_html, article_data, featured_media_id=None)
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
+    # Extract focus keyword cleanly (convert lists/arrays to a single string if needed)
+    raw_keyword = article_data.get("focus_keyword", "Sri Lanka news")
+    if isinstance(raw_keyword, list):
+        focus_keyword_str = ", ".join(raw_keyword)
+    else:
+        focus_keyword_str = str(raw_keyword).strip()
+    
     # Rank Math SEO meta fields payload
     meta_payload = {
         "rank_math_title": article_data.get("meta_title", f"{title} | BrunchPress"),
         "rank_math_description": article_data.get("meta_description", ""),
-        "rank_math_focus_keyword": article_data.get("focus_keyword", "Sri Lanka news")
+        "rank_math_focus_keyword": focus_keyword_str
     }
 
     body = {
