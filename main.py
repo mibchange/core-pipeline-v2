@@ -241,29 +241,37 @@ def rewrite_with_gemini(raw_text, original_title):
     client = genai.Client(api_key=GEMINI_API_KEY.strip())
     
     prompt = f"""
-    You are an expert senior news editor writing for an independent publication called BrunchPress.
-    Your objective is to craft a rich, engaging, polished, and comprehensive news article based on the provided source text.
+    You are an expert senior news editor writing for BrunchPress.
+    Craft a polished, original, and authoritative news article based on the provided source text.
 
-    EDITORIAL & ACCURACY MANDATES:
-    1. NO SOURCE ATTRIBUTION OR CITATIONS:
-       - NEVER write "according to [Website]", "reported by [Publication]", "as stated in [Outlet]", or include any external URLs/domains. Write as an original, authoritative BrunchPress news report.
-    2. ZERO HALLUCINATIONS OR INVENTED NAMES:
-       - Rely strictly on the facts provided in the raw text below.
-       - NEVER invent, guess, or insert names, titles, former officials, or unverified background details (e.g. do not guess the Speaker of Parliament or invent historical figures).
-    3. 3. COMPLETE ENTITY INTEGRATION & RICH NARRATIVE:
+    EDITORIAL & ACCURACY RULES:
+    1. NO SOURCE CITATIONS OR ATTRIBUTION:
+       - NEVER write "according to [Website]", "reported by [Publication]", or include external links. Write as an original BrunchPress news report.
+    2. STRICT FACTUAL ACCURACY:
+       - Use ONLY facts from the source text. NEVER invent names, official titles, or unverified details.
+    3. FULL CONTEXT & SPECIFICS:
+       - Include all key names, exact locations (towns/cities), state institutions, and official designations (e.g., if Johnston Fernando is named, state full name and role).
 
-       - Include every specific name, expert, location, figure, date, and detail provided in the source text (e.g. if a name like "Ansley de Silva" appears, it MUST be featured in the narrative). Please provide the proper context. Context is very important. If a Sri Lankan policy is unveiled, STATE always the context i.e put down which State entity is responsible for these changes. If Johnston Fernando is being indicted say Jonhnston Fernando is being indicted; both names and title not just one name, Johnston only. Get these details from the original story. Pl give all context such as WHERE exactly something is happening, i.e town name. 
-       - Do NOT make the article brief, dry, or juvenile. Weave a full, fluid, professional news story (3 to 5 well-developed paragraphs) covering the background, context, implications, and key parameters (Who, What, When, Where, Why). 
-       4. - If the raw text is clearly an old historical story from past years (e.g., elections from 2015 or old events), output EXACTLY:
-         {{"title": "SERVER ERROR", "content": "SERVER ERROR", "image_query": "none"}}
+    RELEVANCE GATE & COMMENTARY STYLE:
+    - Determine if the story is ROUTINE or HIGH-IMPACT.
+    - ROUTINE NEWS (e.g. ambassador appointments, match results, routine court adjournments, simple notices): Keep crisp, direct, and factual. DO NOT add forced commentary, analytical opinion, or unnecessary grandstanding.
+    - HIGH-IMPACT NEWS (e.g. economic policy, major legal decisions, national political shifts): Include 1 natural, well-reasoned paragraph offering practical context or broader implications.
+    - BANNED CLICHÉS: NEVER use phrases like "only time will tell", "a step in the right direction", "it remains to be seen", "in a surprising move", or "serves as a stark reminder". Write like a seasoned human journalist.
+
+    HISTORICAL CHECK:
+    - If the raw text is clearly an old archived story from past years, output EXACTLY:
+      {{"title": "SERVER ERROR", "content": "SERVER ERROR", "image_query": "none"}}
 
     FORMATTING REQUIREMENTS:
-    - Return ONLY a raw JSON object without markdown code blocks (do NOT use ```json or ```).
+    - Return ONLY a raw JSON object without markdown formatting.
     - JSON Schema:
       {{
-        "title": "A strong, engaging, professional news headline",
-        "content": "<p>Comprehensive opening paragraph weaving together the core story, key figures, and immediate context...</p><p>Detailed body paragraphs expanding on background, facts, and specifics...</p><h2>Key Developments</h2><ul><li>Detailed takeaway 1</li><li>Detailed takeaway 2</li></ul><p>Concluding paragraph on significance and forward outlook...</p>",
-        "image_query": "2 to 3 concise English keywords for stock photo lookup"
+        "title": "A strong, engaging, newsroom headline",
+        "content": "<p>Comprehensive opening paragraph covering who, what, when, where, and context...</p><p>Detailed body paragraphs with facts and background...</p><h2>Key Developments</h2><ul><li>Takeaway 1</li><li>Takeaway 2</li></ul><p>Concluding paragraph (routine news stays purely factual; high-impact news adds authentic analysis)...</p>",
+        "image_query": "2 to 3 concise English keywords for stock photo search",
+        "meta_title": "SEO title under 60 chars ending with | BrunchPress",
+        "meta_description": "Engaging news summary under 155 chars for search engines",
+        "focus_keyword": "Primary 2-3 word topic keyword"
       }}
 
     Original Title: {original_title}
@@ -284,7 +292,7 @@ def rewrite_with_gemini(raw_text, original_title):
         
     return json.loads(response_text)
 
-def post_to_wordpress(title, content_html, featured_media_id=None):
+def post_to_wordpress(title, content_html, article_data, featured_media_id=None):
     api_endpoint = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/posts"
     credentials = f"{WP_USER}:{WP_APP_PASSWORD}"
     token = base64.b64encode(credentials.encode()).decode("utf-8")
@@ -295,11 +303,19 @@ def post_to_wordpress(title, content_html, featured_media_id=None):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
+    # Rank Math SEO meta fields payload
+    meta_payload = {
+        "rank_math_title": article_data.get("meta_title", f"{title} | BrunchPress"),
+        "rank_math_description": article_data.get("meta_description", ""),
+        "rank_math_focus_keyword": article_data.get("focus_keyword", "Sri Lanka news")
+    }
+
     body = {
         "title": title,
         "content": content_html,
         "status": "publish",
-        "categories": [18]  # Assigns to Category 18 while appearing on Front Page automatically
+        "categories": [18],  # Assigns to Category 18 while appearing on Front Page automatically
+        "meta": meta_payload
     }
     
     if featured_media_id:
@@ -307,7 +323,7 @@ def post_to_wordpress(title, content_html, featured_media_id=None):
     
     res = requests.post(api_endpoint, headers=headers, json=body, timeout=10)
     if res.status_code in [200, 201]:
-        print(f"Successfully published to Category 18 & Front Page: {title}")
+        print(f"Successfully published to Category 18 & Front Page with Rank Math Meta: {title}")
         return True
     else:
         print(f"Failed to publish. Status: {res.status_code}, Response: {res.text}")
@@ -380,7 +396,7 @@ def run_pipeline():
         if image_url:
             media_id = upload_image_to_wordpress(image_url)
             
-        success = post_to_wordpress(article_data["title"], article_data["content"], featured_media_id=media_id)
+        success = post_to_wordpress(article_data["title"], article_data["content"], article_data, featured_media_id=media_id)
         if success:
             save_to_history(raw_url)
             recent_wp_titles.insert(0, article_data["title"])  # Update local duplicate memory
