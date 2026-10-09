@@ -34,8 +34,8 @@ def save_to_history(entry_id):
         f.write(f"{entry_id}\n")
 
 def fetch_recent_wordpress_titles():
-    """Fetches the last 30 published post titles directly from WordPress to prevent duplicate topics."""
-    api_endpoint = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/posts?per_page=30&_fields=title"
+    """Fetches the last 60 published post titles directly from WordPress to prevent duplicate topics."""
+    api_endpoint = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/posts?per_page=60&_fields=title"
     credentials = f"{WP_USER}:{WP_APP_PASSWORD}"
     token = base64.b64encode(credentials.encode()).decode("utf-8")
     headers = {
@@ -69,7 +69,7 @@ def is_semantic_duplicate(new_title, new_summary, recent_titles):
         
     client = genai.Client(api_key=GEMINI_API_KEY.strip())
     
-    recent_list_str = "\n".join([f"- {t}" for t in recent_titles[:25]])
+    recent_list_str = "\n".join([f"- {t}" for t in recent_titles[:35]])
     prompt = f"""
     You are a strict news editor screening incoming stories for duplicate coverage.
     
@@ -79,7 +79,8 @@ def is_semantic_duplicate(new_title, new_summary, recent_titles):
     Incoming Story Title: "{new_title}"
     Incoming Story Summary: "{new_summary[:300]}"
     
-    Question: Is this incoming story reporting on the exact same underlying event, incident, or news story as any of the recently published headlines?
+    Question: Strictly analyze if the INCOMING story reports on the SAME underlying event, incident, court proceeding, or official announcement as ANY of the recent headlines. 
+    Ignore differences in headline phrasing or writing style—focus on core subjects (entities, names, places, and specific news developments).
     
     Return ONLY a raw JSON object:
     {{
@@ -371,44 +372,4 @@ def run_pipeline():
         print(f"\nProcessing unique story ({processed_count + 1}/5): {entry_title}")
         target_url = resolve_google_url(raw_url)
         
-        raw_text, raw_html = extract_article_content(target_url)
-        
-        # 4. Strict Date Check (Blocks old archived stories from past years)
-        if not check_entry_date(entry, raw_html):
-            print(f"Discarding outdated article: '{entry_title}'")
-            save_to_history(raw_url)
-            continue
-
-        if not raw_text or len(raw_text) < 100:
-            raw_text = f"{entry_title}. {summary}"
-            print("Using RSS summary fallback.")
-
-        try:
-            article_data = rewrite_with_gemini(raw_text, entry_title)
-        except Exception as e:
-            print(f"Gemini processing error: {e}")
-            continue
-
-        # 5. SERVER ERROR Gatekeeper
-        if article_data.get("title") == "SERVER ERROR" or article_data.get("content") == "SERVER ERROR":
-            print(f"SERVER ERROR triggered for '{entry_title}'. Story discarded due to historical date mismatch.")
-            save_to_history(raw_url)
-            continue
-            
-        # Pexels photo lookup & WordPress media upload
-        image_query = article_data.get("image_query", "sri lanka news")
-        image_url = get_pexels_image_url(image_query)
-        
-        media_id = None
-        if image_url:
-            media_id = upload_image_to_wordpress(image_url)
-            
-        success = post_to_wordpress(article_data["title"], article_data["content"], article_data, featured_media_id=media_id)
-        if success:
-            save_to_history(raw_url)
-            recent_wp_titles.insert(0, article_data["title"])  # Update local duplicate memory
-            processed_count += 1
-            print(f"Successfully published story {processed_count}/5!")
-
-if __name__ == "__main__":
-    run_pipeline()
+        raw_text, raw_
