@@ -125,7 +125,7 @@ def upload_image_to_wordpress(image_url):
 
 def write_investigative_feature_with_gemini(raw_text, target_url):
     """
-    Uses Gemini to craft an incisive, investigative, and politically compelling feature article.
+    Uses Gemini 3.8 Flash to craft an incisive, investigative, and politically compelling feature article.
     """
     client = genai.Client(api_key=GEMINI_API_KEY.strip())
     
@@ -152,7 +152,8 @@ def write_investigative_feature_with_gemini(raw_text, target_url):
     {raw_text[:6000]}
     """
     
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    # Updated model string to gemini-3.8-flash
+    response = client.models.generate_content(model="gemini-3.8-flash", contents=prompt)
     response_text = response.text.strip()
     
     if response_text.startswith("```json"):
