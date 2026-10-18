@@ -21,6 +21,12 @@ RSS_FEED_URL = "https://news.google.com/rss/search?q=Sri+Lanka+news&hl=en-US&gl=
 HISTORY_FILE = "published_history.txt"
 CURRENT_YEAR = 2026  # Enforces fresh content validation
 
+# Unified API Client targeting Google GenAI SDK
+def get_gemini_client():
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY environment variable is missing.")
+    return genai.Client(api_key=GEMINI_API_KEY.strip())
+
 def load_history():
     """Loads previously processed URLs and titles."""
     if os.path.exists(HISTORY_FILE):
@@ -63,11 +69,11 @@ def is_title_similar(new_title, recent_titles, threshold=0.65):
     return False
 
 def is_semantic_duplicate(new_title, new_summary, recent_titles):
-    """Asks Gemini Flash if the new story is a duplicate coverage of an already published event."""
+    """Asks Gemini Flash if the new story is duplicate coverage of an already published event."""
     if not recent_titles:
         return False
         
-    client = genai.Client(api_key=GEMINI_API_KEY.strip())
+    client = get_gemini_client()
     
     recent_list_str = "\n".join([f"- {t}" for t in recent_titles[:25]])
     prompt = f"""
@@ -89,7 +95,7 @@ def is_semantic_duplicate(new_title, new_summary, recent_titles):
     """
     try:
         response = client.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
         text = response.text.strip()
@@ -114,7 +120,7 @@ def resolve_google_url(google_url):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         })
         res = session.get(google_url, allow_redirects=True, timeout=8)
-        clean_url = res.url.split("?")[0]  # Strips tracking query parameters
+        clean_url = res.url.split("?")[0]
         return clean_url
     except Exception as e:
         print(f"URL resolve fallback used: {e}")
@@ -122,8 +128,7 @@ def resolve_google_url(google_url):
 
 def check_entry_date(entry, raw_html_downloaded):
     """
-    Validates publication year to block old recycled stories (e.g. 2015/2018 news indexed recently).
-    Allows current year articles, recent stories, and undated fresh content.
+    Validates publication year to block old recycled stories.
     """
     if hasattr(entry, 'published_parsed') and entry.published_parsed:
         pub_year = entry.published_parsed.tm_year
@@ -147,8 +152,7 @@ def check_entry_date(entry, raw_html_downloaded):
 
 def extract_article_content(url):
     """
-    Robust scraper featuring trafilatura + custom BeautifulSoup fallback for
-    sites like ft.lk and adaderana.lk to bypass ad pop-ups and custom structures.
+    Scraper featuring trafilatura + custom BeautifulSoup fallback.
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -156,19 +160,16 @@ def extract_article_content(url):
     }
     
     try:
-        # Primary: Trafilatura Extraction
         downloaded = trafilatura.fetch_url(url)
         if downloaded:
             text_content = trafilatura.extract(downloaded)
             if text_content and len(text_content.strip()) > 150:
                 return text_content, downloaded
 
-        # Secondary: BeautifulSoup Fallback for AdaDerana / FT.lk
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # Remove scripts, styles, and headers/footers
             for element in soup(["script", "style", "iframe", "header", "footer", "nav", "aside"]):
                 element.decompose()
 
@@ -238,7 +239,7 @@ def upload_image_to_wordpress(image_url):
     return None
 
 def rewrite_with_gemini(raw_text, original_title):
-    client = genai.Client(api_key=GEMINI_API_KEY.strip())
+    client = get_gemini_client()
     
     prompt = f"""
     You are an expert senior news editor writing for BrunchPress.
@@ -250,13 +251,13 @@ def rewrite_with_gemini(raw_text, original_title):
     2. STRICT FACTUAL ACCURACY:
        - Use ONLY facts from the source text. NEVER invent names, official titles, or unverified details.
     3. FULL CONTEXT & SPECIFICS:
-       - Include all key names, exact locations (towns/cities), state institutions, and official designations (e.g., if Johnston Fernando is named, state full name and role).
+       - Include all key names, exact locations (towns/cities), state institutions, and official designations.
 
     RELEVANCE GATE & COMMENTARY STYLE:
     - Determine if the story is ROUTINE or HIGH-IMPACT.
-    - ROUTINE NEWS (e.g. ambassador appointments, match results, routine court adjournments, simple notices): Keep crisp, direct, and factual. DO NOT add forced commentary, analytical opinion, or unnecessary grandstanding.
-    - HIGH-IMPACT NEWS (e.g. economic policy, major legal decisions, national political shifts): Include 1 natural, well-reasoned paragraph offering practical context or broader implications.
-    - BANNED CLICHÉS: NEVER use phrases like "only time will tell", "a step in the right direction", "it remains to be seen", "in a surprising move", or "serves as a stark reminder". Write like a seasoned human journalist.
+    - ROUTINE NEWS: Keep crisp, direct, and factual. DO NOT add forced commentary, analytical opinion, or unnecessary grandstanding.
+    - HIGH-IMPACT NEWS: Include 1 natural, well-reasoned paragraph offering practical context or broader implications.
+    - BANNED CLICHÉS: NEVER use phrases like "only time will tell", "a step in the right direction", "it remains to be seen", "in a surprising move", or "serves as a stark reminder".
 
     HISTORICAL CHECK:
     - If the raw text is clearly an old archived story from past years, output EXACTLY:
@@ -267,11 +268,11 @@ def rewrite_with_gemini(raw_text, original_title):
     - JSON Schema:
       {{
         "title": "A strong, engaging, newsroom headline",
-        "content": "<p>Comprehensive opening paragraph covering who, what, when, where, and context...</p><p>Detailed body paragraphs with facts and background...</p><h2>Key Developments</h2><ul><li>Takeaway 1</li><li>Takeaway 2</li></ul><p>Concluding paragraph (routine news stays purely factual; high-impact news adds authentic analysis)...</p>",
+        "content": "<p>Comprehensive opening paragraph...</p><p>Detailed body paragraphs...</p><h2>Key Developments</h2><ul><li>Takeaway 1</li></ul><p>Concluding paragraph...</p>",
         "image_query": "2 to 3 concise English keywords for stock photo search",
         "meta_title": "SEO title under 60 chars ending with | BrunchPress",
         "meta_description": "Engaging news summary under 155 chars for search engines",
-        "focus_keyword": "Primary 2-3 word topic keyword, comma-separated if multiple keywords"
+        "focus_keyword": "Primary 2-3 word topic keyword"
       }}
 
     Original Title: {original_title}
@@ -280,7 +281,7 @@ def rewrite_with_gemini(raw_text, original_title):
     """
     
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-2.5-flash",
         contents=prompt,
     )
     
@@ -300,17 +301,12 @@ def post_to_wordpress(title, content_html, article_data, featured_media_id=None)
     headers = {
         "Authorization": f"Basic {token}",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
-    # Extract focus keyword cleanly (convert lists/arrays to a single string if needed)
     raw_keyword = article_data.get("focus_keyword", "Sri Lanka news")
-    if isinstance(raw_keyword, list):
-        focus_keyword_str = ", ".join(raw_keyword)
-    else:
-        focus_keyword_str = str(raw_keyword).strip()
+    focus_keyword_str = ", ".join(raw_keyword) if isinstance(raw_keyword, list) else str(raw_keyword).strip()
     
-    # Rank Math SEO meta fields payload
     meta_payload = {
         "rank_math_title": article_data.get("meta_title", f"{title} | BrunchPress"),
         "rank_math_description": article_data.get("meta_description", ""),
@@ -321,7 +317,7 @@ def post_to_wordpress(title, content_html, article_data, featured_media_id=None)
         "title": title,
         "content": content_html,
         "status": "publish",
-        "categories": [18],  # Assigns to Category 18 while appearing on Front Page automatically
+        "categories": [18],
         "meta": meta_payload
     }
     
@@ -338,14 +334,24 @@ def post_to_wordpress(title, content_html, article_data, featured_media_id=None)
 
 def run_pipeline():
     history = load_history()
-    recent_wp_titles = fetch_recent_wordpress_titles()
     feed = feedparser.parse(RSS_FEED_URL)
     
-    print(f"Found {len(feed.entries)} items in feed. Fetched {len(recent_wp_titles)} recent titles from WordPress.")
+    # -------------------------------------------------------------------
+    # ZERO-COST GUARD CLAUSE
+    # Filters out already processed links locally before doing ANY external 
+    # API calls, scraping, or Gemini executions.
+    # -------------------------------------------------------------------
+    unposted_entries = [e for e in feed.entries if e.link not in history]
+    
+    if not unposted_entries:
+        print("No new RSS entries found in history. Pipeline exiting at $0.00 cost.")
+        return
+
+    recent_wp_titles = fetch_recent_wordpress_titles()
+    print(f"Found {len(unposted_entries)} new links out of {len(feed.entries)} total entries. Fetched {len(recent_wp_titles)} recent WP titles.")
     
     processed_count = 0
-    # Process up to 5 unique stories per execution run
-    for entry in feed.entries:
+    for entry in unposted_entries:
         if processed_count >= 5:
             print("Batch target of 5 stories reached. Ending run.")
             break
@@ -354,26 +360,17 @@ def run_pipeline():
         entry_title = entry.title
         summary = getattr(entry, 'summary', '')
 
-        # 1. URL History Check
-        if raw_url in history:
-            continue
-            
-        # 2. Fuzzy Title Match Check
+        # 1. Fuzzy Title Match Check (Free local check)
         if is_title_similar(entry_title, recent_wp_titles):
             save_to_history(raw_url)
             continue
-
-        # 3. Gemini Semantic Duplicate Gatekeeper
-        if is_semantic_duplicate(entry_title, summary, recent_wp_titles):
-            save_to_history(raw_url)
-            continue
             
-        print(f"\nProcessing unique story ({processed_count + 1}/5): {entry_title}")
+        print(f"\nProcessing candidate ({processed_count + 1}/5): {entry_title}")
         target_url = resolve_google_url(raw_url)
         
         raw_text, raw_html = extract_article_content(target_url)
         
-        # 4. Strict Date Check (Blocks old archived stories from past years)
+        # 2. Strict Date Check (Free local check)
         if not check_entry_date(entry, raw_html):
             print(f"Discarding outdated article: '{entry_title}'")
             save_to_history(raw_url)
@@ -383,13 +380,18 @@ def run_pipeline():
             raw_text = f"{entry_title}. {summary}"
             print("Using RSS summary fallback.")
 
+        # 3. Gemini Semantic Duplicate Gatekeeper (Executed ONLY on verified fresh candidates)
+        if is_semantic_duplicate(entry_title, summary, recent_wp_titles):
+            save_to_history(raw_url)
+            continue
+
         try:
             article_data = rewrite_with_gemini(raw_text, entry_title)
         except Exception as e:
             print(f"Gemini processing error: {e}")
             continue
 
-        # 5. SERVER ERROR Gatekeeper
+        # 4. SERVER ERROR Gatekeeper
         if article_data.get("title") == "SERVER ERROR" or article_data.get("content") == "SERVER ERROR":
             print(f"SERVER ERROR triggered for '{entry_title}'. Story discarded due to historical date mismatch.")
             save_to_history(raw_url)
@@ -406,7 +408,7 @@ def run_pipeline():
         success = post_to_wordpress(article_data["title"], article_data["content"], article_data, featured_media_id=media_id)
         if success:
             save_to_history(raw_url)
-            recent_wp_titles.insert(0, article_data["title"])  # Update local duplicate memory
+            recent_wp_titles.insert(0, article_data["title"])
             processed_count += 1
             print(f"Successfully published story {processed_count}/5!")
 
