@@ -14,6 +14,11 @@ WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD")
 
 YOUTUBE_RSS_URL = "https://rss.app/feeds/E2WvJe9Ayyma7Zzn.xml"
 
+def get_gemini_client():
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY environment variable is missing.")
+    return genai.Client(api_key=GEMINI_API_KEY.strip())
+
 def extract_youtube_id(url_or_guid_or_text):
     patterns = [
         r"(?:v=|\/vi\/|\/videos\/|\/embed\/|\/shorts\/|youtu\.be\/|\/v\/|yt:video:)([a-zA-Z0-9_-]{11})"
@@ -63,27 +68,24 @@ def is_video_id_published(video_id, recent_posts):
         excerpt = post.get("excerpt", {}).get("rendered", "")
         
         if video_id in content or video_id in excerpt or video_id in title:
-            print(f"==> MATCH FOUND! Video ID '{video_id}' exists in WP Post ID {post_id} ('{title}').")
             return True
     return False
 
 def is_semantic_duplicate_story(incoming_title, recent_posts):
     """
-    Tier 2 Check: Uses Gemini-3.8-flash to evaluate whether the incoming title covers 
-    the exact same specific news event/speech as any existing recent post, 
-    even if uploaded by different outlets or with slightly different wording.
+    Tier 2 Check: Uses Gemini-2.5-flash to evaluate whether the incoming title covers 
+    the exact same specific news event/speech as any existing recent post.
     """
     if not GEMINI_API_KEY:
         print("WARNING: GEMINI_API_KEY not found. Skipping semantic check.")
         return False
 
-    # Extract existing post titles
     existing_titles = [post.get("title", {}).get("rendered", "") for post in recent_posts if post.get("title", {}).get("rendered", "")]
     
     if not existing_titles:
         return False
 
-    client = genai.Client(api_key=GEMINI_API_KEY.strip())
+    client = get_gemini_client()
 
     prompt = f"""
     You are a senior news editor evaluating video headlines for an automated news portal.
@@ -111,7 +113,7 @@ def is_semantic_duplicate_story(incoming_title, recent_posts):
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-2.5-flash",
             contents=prompt
         )
         
@@ -224,6 +226,8 @@ def run_video_pipeline():
     # Fetch existing posts once for comparison
     recent_posts = fetch_recent_wp_video_posts()
 
+    # Parse and locate candidate video IDs
+    candidates = []
     for entry in feed.entries:
         video_url = getattr(entry, 'link', '')
         entry_title = getattr(entry, 'title', '')
@@ -231,16 +235,30 @@ def run_video_pipeline():
         guid = getattr(entry, 'id', '')
 
         video_id = extract_youtube_id(video_url) or extract_youtube_id(guid) or extract_youtube_id(summary)
-        
-        if not video_id:
-            continue
+        if video_id:
+            candidates.append({
+                "video_id": video_id,
+                "title": entry_title
+            })
 
-        # Tier 1 Check: Exact Video ID
-        if is_video_id_published(video_id, recent_posts):
-            print(f"SKIPPING: Video ID '{video_id}' is already published on WP.")
-            continue
+    # -------------------------------------------------------------------
+    # ZERO-COST GUARD CLAUSE
+    # Filter out candidates whose video_id is already published on WP
+    # BEFORE running any Gemini API semantic checks or image uploads.
+    # -------------------------------------------------------------------
+    new_candidates = [c for c in candidates if not is_video_id_published(c["video_id"], recent_posts)]
 
-        # Tier 2 Check: Gemini Semantic Event Deduplication
+    if not new_candidates:
+        print("No new video items to process. Exiting at $0.00 cost.")
+        return
+
+    print(f"Found {len(new_candidates)} unpublished candidate videos. Checking semantic uniqueness...")
+
+    for item in new_candidates:
+        video_id = item["video_id"]
+        entry_title = item["title"]
+
+        # Tier 2 Check: Gemini Semantic Event Deduplication (Only run on fresh items)
         if is_semantic_duplicate_story(entry_title, recent_posts):
             print(f"SKIPPING: Story '{entry_title}' is semantically duplicate.")
             continue
