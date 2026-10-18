@@ -113,7 +113,7 @@ def is_semantic_duplicate_story(incoming_title, recent_posts):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=prompt
         )
         
