@@ -17,6 +17,11 @@ RSS_FEED_URL = "https://lifehacker.com/feed/rss"
 HISTORY_FILE = "lifehacker_history.txt"
 WP_CATEGORY_ID = 42  # Category 42 for Lifehacker Aggregation
 
+def get_gemini_client():
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY environment variable is missing.")
+    return genai.Client(api_key=GEMINI_API_KEY.strip())
+
 def load_history():
     """Loads previously processed Lifehacker URLs and GUIDs."""
     if os.path.exists(HISTORY_FILE):
@@ -104,10 +109,10 @@ def upload_image_to_wordpress(image_url):
 
 def generate_teaser_and_image_prompt(original_title, original_summary):
     """
-    Uses Gemini to generate an engaging short teaser and highly specific, 
+    Uses Gemini-3.8-flash to generate an engaging short teaser and highly specific, 
     visually descriptive Pexels search terms.
     """
-    client = genai.Client(api_key=GEMINI_API_KEY.strip())
+    client = get_gemini_client()
     
     prompt = f"""
     You are an editorial assistant aggregating content for BrunchPress.
@@ -185,10 +190,27 @@ def run_pipeline():
     history = load_history()
     feed = feedparser.parse(RSS_FEED_URL)
     
-    print(f"Found {len(feed.entries)} items in Lifehacker feed.")
+    # -------------------------------------------------------------------
+    # ZERO-COST GUARD CLAUSE
+    # Pre-filter entries locally before calling Gemini or Pexels
+    # -------------------------------------------------------------------
+    unprocessed_entries = []
+    for entry in feed.entries:
+        original_url = entry.link
+        normalized_url = clean_url(original_url)
+        entry_guid = getattr(entry, 'id', '')
+
+        if original_url not in history and normalized_url not in history and (not entry_guid or entry_guid not in history):
+            unprocessed_entries.append(entry)
+
+    if not unprocessed_entries:
+        print("No new Lifehacker stories found. Pipeline exiting at $0.00 cost.")
+        return
+
+    print(f"Found {len(unprocessed_entries)} new Lifehacker stories out of {len(feed.entries)} total RSS items.")
     
     processed_count = 0
-    for entry in feed.entries:
+    for entry in unprocessed_entries:
         if processed_count >= 2:
             print("Batch limit of 2 new stories reached. Ending run.")
             break
@@ -198,11 +220,6 @@ def run_pipeline():
         entry_guid = getattr(entry, 'id', '')
         entry_title = entry.title
         summary = getattr(entry, 'summary', '')
-
-        # Robust Deduplication Check: Checks raw URL, normalized URL, and RSS GUID
-        if original_url in history or normalized_url in history or (entry_guid and entry_guid in history):
-            print(f"Skipping already processed item: {entry_title}")
-            continue
             
         print(f"\nProcessing Lifehacker story: {entry_title}")
 
@@ -221,7 +238,6 @@ def run_pipeline():
             
         success = post_to_wordpress(entry_title, original_url, teaser, featured_media_id=media_id)
         if success:
-            # Save all identifier variations to guarantee no future duplicates
             save_to_history(original_url)
             if normalized_url:
                 save_to_history(normalized_url)
