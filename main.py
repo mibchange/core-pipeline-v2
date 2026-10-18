@@ -95,7 +95,7 @@ def is_semantic_duplicate(new_title, new_summary, recent_titles):
     """
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
         )
         text = response.text.strip()
@@ -281,7 +281,7 @@ def rewrite_with_gemini(raw_text, original_title):
     """
     
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
     )
     
