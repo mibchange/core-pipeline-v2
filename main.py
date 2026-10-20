@@ -28,16 +28,16 @@ def get_gemini_client():
     return genai.Client(api_key=GEMINI_API_KEY.strip())
 
 def load_history():
-    """Loads previously processed URLs and titles."""
+    """Loads previously processed article titles to ensure permanent duplicate blocking."""
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return set(line.strip() for line in f if line.strip())
+            return set(line.strip().lower() for line in f if line.strip())
     return set()
 
-def save_to_history(entry_id):
-    """Saves URL or title identifier to local history log."""
+def save_to_history(entry_title):
+    """Saves normalized article title to local history log."""
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{entry_id}\n")
+        f.write(f"{entry_title.strip().lower()}\n")
 
 def fetch_recent_wordpress_titles():
     """Fetches the last 30 published post titles directly from WordPress to prevent duplicate topics."""
@@ -247,11 +247,11 @@ def rewrite_with_gemini(raw_text, original_title):
 
     EDITORIAL & ACCURACY RULES:
     1. NO SOURCE CITATIONS OR ATTRIBUTION:
-       - NEVER write "according to [Website]", "reported by [Publication]", or include external links. Write as an original BrunchPress news report.
+        - NEVER write "according to [Website]", "reported by [Publication]", or include external links. Write as an original BrunchPress news report.
     2. STRICT FACTUAL ACCURACY:
-       - Use ONLY facts from the source text. NEVER invent names, official titles, or unverified details.
+        - Use ONLY facts from the source text. NEVER invent names, official titles, or unverified details.
     3. FULL CONTEXT & SPECIFICS:
-       - Include all key names, exact locations (towns/cities), state institutions, and official designations.
+        - Include all key names, exact locations (towns/cities), state institutions, and official designations.
 
     RELEVANCE GATE & COMMENTARY STYLE:
     - Determine if the story is ROUTINE or HIGH-IMPACT.
@@ -336,12 +336,8 @@ def run_pipeline():
     history = load_history()
     feed = feedparser.parse(RSS_FEED_URL)
     
-    # -------------------------------------------------------------------
-    # ZERO-COST GUARD CLAUSE
-    # Filters out already processed links locally before doing ANY external 
-    # API calls, scraping, or Gemini executions.
-    # -------------------------------------------------------------------
-    unposted_entries = [e for e in feed.entries if e.link not in history]
+    # FIX: Tracking by title instead of volatile Google tracking links
+    unposted_entries = [e for e in feed.entries if e.title.strip().lower() not in history]
     
     if not unposted_entries:
         print("No new RSS entries found in history. Pipeline exiting at $0.00 cost.")
@@ -356,13 +352,13 @@ def run_pipeline():
             print("Batch target of 5 stories reached. Ending run.")
             break
 
-        raw_url = entry.link
         entry_title = entry.title
+        raw_url = entry.link
         summary = getattr(entry, 'summary', '')
 
         # 1. Fuzzy Title Match Check (Free local check)
         if is_title_similar(entry_title, recent_wp_titles):
-            save_to_history(raw_url)
+            save_to_history(entry_title)
             continue
             
         print(f"\nProcessing candidate ({processed_count + 1}/5): {entry_title}")
@@ -373,16 +369,16 @@ def run_pipeline():
         # 2. Strict Date Check (Free local check)
         if not check_entry_date(entry, raw_html):
             print(f"Discarding outdated article: '{entry_title}'")
-            save_to_history(raw_url)
+            save_to_history(entry_title)
             continue
 
         if not raw_text or len(raw_text) < 100:
             raw_text = f"{entry_title}. {summary}"
             print("Using RSS summary fallback.")
 
-        # 3. Gemini Semantic Duplicate Gatekeeper (Executed ONLY on verified fresh candidates)
+        # 3. Gemini Semantic Duplicate Gatekeeper
         if is_semantic_duplicate(entry_title, summary, recent_wp_titles):
-            save_to_history(raw_url)
+            save_to_history(entry_title)
             continue
 
         try:
@@ -394,7 +390,7 @@ def run_pipeline():
         # 4. SERVER ERROR Gatekeeper
         if article_data.get("title") == "SERVER ERROR" or article_data.get("content") == "SERVER ERROR":
             print(f"SERVER ERROR triggered for '{entry_title}'. Story discarded due to historical date mismatch.")
-            save_to_history(raw_url)
+            save_to_history(entry_title)
             continue
             
         # Pexels photo lookup & WordPress media upload
@@ -407,7 +403,7 @@ def run_pipeline():
             
         success = post_to_wordpress(article_data["title"], article_data["content"], article_data, featured_media_id=media_id)
         if success:
-            save_to_history(raw_url)
+            save_to_history(entry_title)  # FIX: Saves title so it's never re-processed
             recent_wp_titles.insert(0, article_data["title"])
             processed_count += 1
             print(f"Successfully published story {processed_count}/5!")
