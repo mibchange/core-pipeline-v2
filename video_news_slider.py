@@ -62,10 +62,9 @@ def fetch_recent_wp_video_posts():
 def is_video_id_published(video_id, recent_posts):
     """Tier 1 Check: Checks if exact video_id exists in WP content/excerpt/title."""
     for post in recent_posts:
-        post_id = post.get("id")
-        title = post.get("title", {}).get("rendered", "")
         content = post.get("content", {}).get("rendered", "")
         excerpt = post.get("excerpt", {}).get("rendered", "")
+        title = post.get("title", {}).get("rendered", "")
         
         if video_id in content or video_id in excerpt or video_id in title:
             return True
@@ -73,47 +72,31 @@ def is_video_id_published(video_id, recent_posts):
 
 def is_semantic_duplicate_story(incoming_title, recent_posts):
     """
-    Tier 2 Check: Uses Gemini-2.5-flash to evaluate whether the incoming title covers 
-    the exact same specific news event/speech as any existing recent post.
+    Tier 2 Check: Uses Gemini to evaluate duplicate stories with minimal tokens.
     """
     if not GEMINI_API_KEY:
-        print("WARNING: GEMINI_API_KEY not found. Skipping semantic check.")
         return False
 
-    existing_titles = [post.get("title", {}).get("rendered", "") for post in recent_posts if post.get("title", {}).get("rendered", "")]
+    # Limit to top 15 recent titles to save input tokens
+    existing_titles = [post.get("title", {}).get("rendered", "") for post in recent_posts if post.get("title", {}).get("rendered", "")] [:15]
     
     if not existing_titles:
         return False
 
     client = get_gemini_client()
 
-    prompt = f"""
-    You are a senior news editor evaluating video headlines for an automated news portal.
+    # Stripped down, token-efficient prompt (no verbose explanations)
+    prompt = f"""Compare incoming news title to existing titles. Are they covering the exact same specific real-world event/speech?
 
-    INCOMING NEW VIDEO HEADLINE:
-    "{incoming_title}"
+Incoming: "{incoming_title}"
+Existing: {json.dumps(existing_titles)}
 
-    RECENTLY PUBLISHED VIDEO HEADLINES ON THE SITE:
-    {json.dumps(existing_titles, indent=2)}
-
-    TASK:
-    Determine if the INCOMING video headline covers the EXACT SAME underlying news event, press conference, or speech as any item in the recently published list (e.g. two different TV channels uploading the same speech at the UN, or two clips of the exact same press conference).
-
-    CRITICAL EDITORIAL RULES:
-    1. Flag as DUPLICATE (True) ONLY if both headlines refer to the exact same specific speech, press conference, or single real-world event.
-    2. Do NOT flag as duplicate (False) if they are two distinct stories, even if they share broad keywords (e.g., "Foreign Minister talks on Trade" vs. "Foreign Minister talks on Border Security" are DIFFERENT stories and must NOT be blocked).
-
-    Return ONLY a raw JSON object without markdown formatting:
-    {{
-      "is_duplicate": true or false,
-      "matched_title": "Title of matched existing post if duplicate, else null",
-      "reason": "Brief one-sentence explanation"
-    }}
-    """
+Return ONLY valid raw JSON, no markdown, no explanations:
+{{"is_duplicate": true/false}}"""
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-2.5-flash",
             contents=prompt
         )
         
@@ -124,20 +107,9 @@ def is_semantic_duplicate_story(incoming_title, recent_posts):
             response_text = response_text[3:-3].strip()
             
         data = json.loads(response_text)
-        is_dup = data.get("is_duplicate", False)
-        
-        if is_dup:
-            print(f"==> SEMANTIC DUPLICATE BLOCKED!")
-            print(f"    Incoming: '{incoming_title}'")
-            print(f"    Matches Existing: '{data.get('matched_title')}'")
-            print(f"    Reason: {data.get('reason')}")
-            return True
-        else:
-            print(f"==> SEMANTIC CHECK PASSED: '{incoming_title}' is a distinct story.")
-            return False
+        return data.get("is_duplicate", False)
 
-    except Exception as e:
-        print(f"Semantic check exception: {e}. Defaulting to safe (False).")
+    except Exception:
         return False
 
 def get_youtube_thumbnail_url(video_id):
@@ -168,12 +140,9 @@ def upload_thumbnail_to_wordpress(image_url, video_id):
             upload_res = requests.post(media_endpoint, headers=media_headers, data=img_res.content, timeout=15)
             if upload_res.status_code in [200, 201]:
                 media_id = upload_res.json().get("id")
-                print(f"=== Featured Image Uploaded: Media ID {media_id} ===")
                 return media_id
-            else:
-                print(f"Media Upload Error {upload_res.status_code}: {upload_res.text[:150]}")
-    except Exception as e:
-        print(f"Thumbnail upload exception: {e}")
+    except Exception:
+        pass
     return None
 
 def post_to_wordpress(title, video_id):
@@ -217,16 +186,12 @@ def run_video_pipeline():
         if response.status_code == 200:
             feed = feedparser.parse(response.text)
         else:
-            print(f"Error fetching RSS feed: {response.status_code}")
             return
-    except Exception as e:
-        print(f"Exception fetching feed: {e}")
+    except Exception:
         return
 
-    # Fetch existing posts once for comparison
     recent_posts = fetch_recent_wp_video_posts()
 
-    # Parse and locate candidate video IDs
     candidates = []
     for entry in feed.entries:
         video_url = getattr(entry, 'link', '')
@@ -241,32 +206,21 @@ def run_video_pipeline():
                 "title": entry_title
             })
 
-    # -------------------------------------------------------------------
-    # ZERO-COST GUARD CLAUSE
-    # Filter out candidates whose video_id is already published on WP
-    # BEFORE running any Gemini API semantic checks or image uploads.
-    # -------------------------------------------------------------------
+    # Tier 1: Zero-cost guard clause for exact video ID match
     new_candidates = [c for c in candidates if not is_video_id_published(c["video_id"], recent_posts)]
 
     if not new_candidates:
-        print("No new video items to process. Exiting at $0.00 cost.")
         return
-
-    print(f"Found {len(new_candidates)} unpublished candidate videos. Checking semantic uniqueness...")
 
     for item in new_candidates:
         video_id = item["video_id"]
         entry_title = item["title"]
 
-        # Tier 2 Check: Gemini Semantic Event Deduplication (Only run on fresh items)
+        # Tier 2: Token-optimized semantic check
         if is_semantic_duplicate_story(entry_title, recent_posts):
-            print(f"SKIPPING: Story '{entry_title}' is semantically duplicate.")
             continue
-
-        print(f"POSTING NEW VIDEO: {entry_title} ({video_id})")
         
         if post_to_wordpress(entry_title, video_id):
-            print(f"Successfully published: {entry_title}")
             break
 
 if __name__ == "__main__":
