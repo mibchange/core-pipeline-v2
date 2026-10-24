@@ -28,16 +28,16 @@ def get_gemini_client():
     return genai.Client(api_key=GEMINI_API_KEY.strip())
 
 def load_history():
-    """Loads previously processed article titles to ensure permanent duplicate blocking."""
+    """Loads previously processed URLs and titles."""
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return set(line.strip().lower() for line in f if line.strip())
+            return set(line.strip() for line in f if line.strip())
     return set()
 
-def save_to_history(entry_title):
-    """Saves normalized article title to local history log."""
+def save_to_history(entry_id):
+    """Saves URL or title identifier to local history log."""
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{entry_title.strip().lower()}\n")
+        f.write(f"{entry_id}\n")
 
 def fetch_recent_wordpress_titles():
     """Fetches the last 30 published post titles directly from WordPress to prevent duplicate topics."""
@@ -48,7 +48,7 @@ def fetch_recent_wordpress_titles():
         "Authorization": f"Basic {token}",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    
+   
     try:
         res = requests.get(api_endpoint, headers=headers, timeout=10)
         if res.status_code == 200:
@@ -72,21 +72,21 @@ def is_semantic_duplicate(new_title, new_summary, recent_titles):
     """Asks Gemini Flash if the new story is duplicate coverage of an already published event."""
     if not recent_titles:
         return False
-        
+       
     client = get_gemini_client()
-    
+   
     recent_list_str = "\n".join([f"- {t}" for t in recent_titles[:25]])
     prompt = f"""
     You are a strict news editor screening incoming stories for duplicate coverage.
-    
+   
     Recently Published Headlines:
     {recent_list_str}
-    
+   
     Incoming Story Title: "{new_title}"
     Incoming Story Summary: "{new_summary[:300]}"
-    
+   
     Question: Is this incoming story reporting on the exact same underlying event, incident, or news story as any of the recently published headlines?
-    
+   
     Return ONLY a raw JSON object:
     {{
       "is_duplicate": true or false,
@@ -103,7 +103,7 @@ def is_semantic_duplicate(new_title, new_summary, recent_titles):
             text = text[7:-3].strip()
         elif text.startswith("```"):
             text = text[3:-3].strip()
-            
+           
         data = json.loads(text)
         if data.get("is_duplicate"):
             print(f"Gemini Semantic Duplicate Check: REJECTED ('{new_title}') -> Reason: {data.get('reason')}")
@@ -158,7 +158,7 @@ def extract_article_content(url):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     }
-    
+   
     try:
         downloaded = trafilatura.fetch_url(url)
         if downloaded:
@@ -169,20 +169,20 @@ def extract_article_content(url):
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            
+           
             for element in soup(["script", "style", "iframe", "header", "footer", "nav", "aside"]):
                 element.decompose()
 
             paragraphs = soup.find_all('p')
             body_text = "\n".join([p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 20])
-            
+           
             if len(body_text) > 150:
                 print(f"BeautifulSoup fallback extracted content for: {url}")
                 return body_text, res.text
 
     except Exception as e:
         print(f"Extraction error for {url}: {e}")
-        
+       
     return None, None
 
 def get_pexels_image_url(search_query):
@@ -194,7 +194,7 @@ def get_pexels_image_url(search_query):
         headers = {"Authorization": PEXELS_API_KEY}
         url = f"https://api.pexels.com/v1/search?query={search_query}&per_page=1&orientation=landscape"
         res = requests.get(url, headers=headers, timeout=10)
-        
+       
         if res.status_code == 200:
             data = res.json()
             photos = data.get("photos", [])
@@ -215,10 +215,10 @@ def upload_image_to_wordpress(image_url):
         img_res = requests.get(image_url, timeout=10)
         if img_res.status_code == 200:
             filename = f"pexels_{image_url.split('/')[-1].split('?')[0]}.jpg"
-            
+           
             credentials = f"{WP_USER}:{WP_APP_PASSWORD}"
             token = base64.b64encode(credentials.encode()).decode("utf-8")
-            
+           
             media_endpoint = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/media"
             media_headers = {
                 "Authorization": f"Basic {token}",
@@ -226,7 +226,7 @@ def upload_image_to_wordpress(image_url):
                 "Content-Disposition": f'attachment; filename="{filename}"',
                 "Content-Type": img_res.headers.get("Content-Type", "image/jpeg")
             }
-            
+           
             upload_res = requests.post(media_endpoint, headers=media_headers, data=img_res.content, timeout=15)
             if upload_res.status_code in [200, 201]:
                 media_id = upload_res.json().get("id")
@@ -240,18 +240,18 @@ def upload_image_to_wordpress(image_url):
 
 def rewrite_with_gemini(raw_text, original_title):
     client = get_gemini_client()
-    
+   
     prompt = f"""
     You are an expert senior news editor writing for BrunchPress.
     Craft a polished, original, and authoritative news article based on the provided source text.
 
     EDITORIAL & ACCURACY RULES:
     1. NO SOURCE CITATIONS OR ATTRIBUTION:
-        - NEVER write "according to [Website]", "reported by [Publication]", or include external links. Write as an original BrunchPress news report.
+       - NEVER write "according to [Website]", "reported by [Publication]", or include external links. Write as an original BrunchPress news report.
     2. STRICT FACTUAL ACCURACY:
-        - Use ONLY facts from the source text. NEVER invent names, official titles, or unverified details.
+       - Use ONLY facts from the source text. NEVER invent names, official titles, or unverified details.
     3. FULL CONTEXT & SPECIFICS:
-        - Include all key names, exact locations (towns/cities), state institutions, and official designations.
+       - Include all key names, exact locations (towns/cities), state institutions, and official designations.
 
     RELEVANCE GATE & COMMENTARY STYLE:
     - Determine if the story is ROUTINE or HIGH-IMPACT.
@@ -279,34 +279,34 @@ def rewrite_with_gemini(raw_text, original_title):
     Raw Source Text:
     {raw_text[:4500]}
     """
-    
+   
     response = client.models.generate_content(
         model="gemini-3.8-flash",
         contents=prompt,
     )
-    
+   
     response_text = response.text.strip()
     if response_text.startswith("```json"):
         response_text = response_text[7:-3].strip()
     elif response_text.startswith("```"):
         response_text = response_text[3:-3].strip()
-        
+       
     return json.loads(response_text)
 
 def post_to_wordpress(title, content_html, article_data, featured_media_id=None):
     api_endpoint = f"{WP_URL.rstrip('/')}/wp-json/wp/v2/posts"
     credentials = f"{WP_USER}:{WP_APP_PASSWORD}"
     token = base64.b64encode(credentials.encode()).decode("utf-8")
-    
+   
     headers = {
         "Authorization": f"Basic {token}",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    
+   
     raw_keyword = article_data.get("focus_keyword", "Sri Lanka news")
     focus_keyword_str = ", ".join(raw_keyword) if isinstance(raw_keyword, list) else str(raw_keyword).strip()
-    
+   
     meta_payload = {
         "rank_math_title": article_data.get("meta_title", f"{title} | BrunchPress"),
         "rank_math_description": article_data.get("meta_description", ""),
@@ -320,10 +320,10 @@ def post_to_wordpress(title, content_html, article_data, featured_media_id=None)
         "categories": [18],
         "meta": meta_payload
     }
-    
+   
     if featured_media_id:
         body["featured_media"] = featured_media_id
-    
+   
     res = requests.post(api_endpoint, headers=headers, json=body, timeout=10)
     if res.status_code in [200, 201]:
         print(f"Successfully published to Category 18 & Front Page with Rank Math Meta: {title}")
@@ -335,50 +335,54 @@ def post_to_wordpress(title, content_html, article_data, featured_media_id=None)
 def run_pipeline():
     history = load_history()
     feed = feedparser.parse(RSS_FEED_URL)
-    
-    # FIX: Tracking by title instead of volatile Google tracking links
-    unposted_entries = [e for e in feed.entries if e.title.strip().lower() not in history]
-    
+   
+    # -------------------------------------------------------------------
+    # ZERO-COST GUARD CLAUSE (Restored URL-based check)
+    # Filters out already processed links locally before doing ANY external
+    # API calls, scraping, or Gemini executions.
+    # -------------------------------------------------------------------
+    unposted_entries = [e for e in feed.entries if e.link not in history]
+   
     if not unposted_entries:
         print("No new RSS entries found in history. Pipeline exiting at $0.00 cost.")
         return
 
     recent_wp_titles = fetch_recent_wordpress_titles()
     print(f"Found {len(unposted_entries)} new links out of {len(feed.entries)} total entries. Fetched {len(recent_wp_titles)} recent WP titles.")
-    
+   
     processed_count = 0
     for entry in unposted_entries:
         if processed_count >= 5:
             print("Batch target of 5 stories reached. Ending run.")
             break
 
-        entry_title = entry.title
         raw_url = entry.link
+        entry_title = entry.title
         summary = getattr(entry, 'summary', '')
 
         # 1. Fuzzy Title Match Check (Free local check)
         if is_title_similar(entry_title, recent_wp_titles):
-            save_to_history(entry_title)
+            save_to_history(raw_url)
             continue
-            
+           
         print(f"\nProcessing candidate ({processed_count + 1}/5): {entry_title}")
         target_url = resolve_google_url(raw_url)
-        
+       
         raw_text, raw_html = extract_article_content(target_url)
-        
+       
         # 2. Strict Date Check (Free local check)
         if not check_entry_date(entry, raw_html):
             print(f"Discarding outdated article: '{entry_title}'")
-            save_to_history(entry_title)
+            save_to_history(raw_url)
             continue
 
         if not raw_text or len(raw_text) < 100:
             raw_text = f"{entry_title}. {summary}"
             print("Using RSS summary fallback.")
 
-        # 3. Gemini Semantic Duplicate Gatekeeper
+        # 3. Gemini Semantic Duplicate Gatekeeper (Executed ONLY on verified fresh candidates)
         if is_semantic_duplicate(entry_title, summary, recent_wp_titles):
-            save_to_history(entry_title)
+            save_to_history(raw_url)
             continue
 
         try:
@@ -390,20 +394,20 @@ def run_pipeline():
         # 4. SERVER ERROR Gatekeeper
         if article_data.get("title") == "SERVER ERROR" or article_data.get("content") == "SERVER ERROR":
             print(f"SERVER ERROR triggered for '{entry_title}'. Story discarded due to historical date mismatch.")
-            save_to_history(entry_title)
+            save_to_history(raw_url)
             continue
-            
+           
         # Pexels photo lookup & WordPress media upload
         image_query = article_data.get("image_query", "sri lanka news")
         image_url = get_pexels_image_url(image_query)
-        
+       
         media_id = None
         if image_url:
             media_id = upload_image_to_wordpress(image_url)
-            
+           
         success = post_to_wordpress(article_data["title"], article_data["content"], article_data, featured_media_id=media_id)
         if success:
-            save_to_history(entry_title)  # FIX: Saves title so it's never re-processed
+            save_to_history(raw_url)
             recent_wp_titles.insert(0, article_data["title"])
             processed_count += 1
             print(f"Successfully published story {processed_count}/5!")
